@@ -12,6 +12,7 @@ import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { PaginationDto } from 'src/common/dtos/pagination.dto';
 import { validate as isUuid } from 'uuid';
+import { ProductImage } from './entities/product-image.entity';
 
 @Injectable()
 export class ProductsService {
@@ -20,23 +21,37 @@ export class ProductsService {
   constructor(
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
+    @InjectRepository(ProductImage)
+    private readonly productImageRepository: Repository<ProductImage>,
   ) {}
 
   async create(createProductDto: CreateProductDto) {
     try {
-      const product = this.productRepository.create(createProductDto);
+      const { images = [], ...productDetails } = createProductDto;
+      const product = this.productRepository.create({
+        ...productDetails,
+        images: images.map((image) =>
+          this.productImageRepository.create({ url: image }),
+        ),
+      });
       await this.productRepository.save(product);
-      return product;
+      return { ...product, images: images };
     } catch (error) {
       this.handleException(error);
     }
   }
 
-  findAll(paginationDto: PaginationDto) {
+  async findAll(paginationDto: PaginationDto) {
     const { limit = 10, offset = 0 } = paginationDto;
-    const products = this.productRepository.find({ take: limit, skip: offset });
-    //TODO: relaciones
-    return products;
+    const products = await this.productRepository.find({
+      take: limit,
+      skip: offset,
+      relations: { images: true },
+    });
+    return products.map((product) => ({
+      ...product,
+      images: product.images.map((image) => image.url),
+    }));
   }
 
   async findOne(term: string) {
@@ -50,6 +65,7 @@ export class ProductsService {
           title: term.toUpperCase(),
           slug: term.toLowerCase(),
         })
+        .leftJoinAndSelect('prod.images', 'prodImages')
         .getOne();
     }
 
@@ -59,9 +75,10 @@ export class ProductsService {
 
   async update(id: string, updateProductDto: UpdateProductDto) {
     try {
+      const { images = [], ...productDetails } = updateProductDto;
       const product = await this.productRepository.preload({
         id: id,
-        ...updateProductDto,
+        ...productDetails,
       });
       if (!product) throw new NotFoundException('Product not found');
       await this.productRepository.save(product);
